@@ -12,17 +12,27 @@ import zhayi.core3341.CoreError.*;
  * @email zhang.5281@osu.edu
  */
 public abstract class CoreNode {
+    public static final int INT_MIN = 0;
+    public static final int INT_MAX = 99999999;
+
     /**
      * Syntax error reporting template.
      * raiseSyntax, raiseConsumeMismatch, raiseUnexpected
      */
-    private static String SYNTAX_TEMPLATE = "Syntax Error: [Line %d] %s";
+    private static final String SYNTAX_TEMPLATE = "Syntax Error: [Line %d] %s";
 
     /**
      * Context error reporting template.
      * checkUndeclared, checkRedeclared
      */
-    private static String CONTEXT_TEMPLATE = "Context Error: [Line %d] %s";
+    static final String CONTEXT_TEMPLATE = "Context Error: [Line %d] %s";
+
+    /**
+     *
+     */
+    static final String INTERPRET_TEMPLATE = "Interpreter Error: [Line %d] %s";
+
+    private static final String INTERNAL_TEMPLATE = "Internal Error: [%s] %s";
 
     /**
      * Indent style, i.e. two whitespaces by assignment statement.
@@ -30,9 +40,14 @@ public abstract class CoreNode {
     private String indent;
 
     /**
-     * Code block level
+     * Code block level.
      */
     int level;
+
+    /**
+     * Line number in original code.
+     */
+    int line;
 
     /**
      * Reference to root {@code ProgNode} for accessing symbol table.
@@ -40,9 +55,11 @@ public abstract class CoreNode {
     ProgNode prog;
 
     /**
-     * Unused. Extends the ability to output result to stream other than {@code System.out}.
+     * Extends the ability to output result to stream other than {@code System.out}.
      */
     PrintStream out;
+
+    PrintStream err;
 
     /**
      * Default constructor.
@@ -50,6 +67,8 @@ public abstract class CoreNode {
     CoreNode() {
         indent = "  ";
         level = 1;
+        out = System.out;
+        err = System.err;
     }
 
     /**
@@ -138,16 +157,29 @@ public abstract class CoreNode {
     }
 
     /**
-     * @deprecated
-     * Raise generic syntax error.
-     * @param line line number of occurrence
-     * @param msg explanation of error
-     * @throws InterpreterException to be caught and printed by {@code Parser}
+     *
+     * @param module
+     * @param msg
+     * @throws Error
      */
-    @Deprecated
-    void raiseSyntax(int line, String msg) throws InterpreterException {
-        String info = String.format(SYNTAX_TEMPLATE, line, msg);
-        throw new InterpreterException(info);
+    void raiseError(String module, String msg) throws Error {
+        String info = String.format(INTERNAL_TEMPLATE, module, msg);
+        throw new Error(info);
+    }
+
+    /**
+     *
+     * @param line
+     * @param ex
+     * @throws InterpreterException
+     */
+    void raiseInterpreter(int line, InterpreterException ex) throws InterpreterException {
+        String info = String.format(INTERPRET_TEMPLATE, line, ex.getMessage());
+        try {
+            throw ex.getClass().getConstructor(String.class).newInstance(info);
+        } catch (Exception e) {
+            throw new Error(e); // I know which class {@code ex} is but you still failed
+        }
     }
 
     /**
@@ -208,9 +240,9 @@ public abstract class CoreNode {
  */
 final class ProgNode extends CoreNode {
     /**
-     * Max of 20 distinct user-defined variables. Not enforced.
+     * Max of 20 distinct user-defined variables.
      */
-    private static int MAX_CAPACITY = 20;
+    public static final int MAX_CAPACITY = 20;
 
     /**
      * Declaration sequence node.
@@ -241,11 +273,17 @@ final class ProgNode extends CoreNode {
     void print() {
         assert(decls != null && stmts != null);
 
-        System.out.println("program ");
+        out.println("program ");
         decls.print();
-        System.out.printf("%sbegin\n", getIndent());
+        out.printf("%sbegin\n", getIndent());
         stmts.print();
-        System.out.printf("%send\n", getIndent());
+        out.printf("%send\n", getIndent());
+    }
+
+    boolean varsIsFull() {
+        if (vars.size() > MAX_CAPACITY)
+            raiseError("ProgNode", "Symbol table exceeded limit " + MAX_CAPACITY + ", got " + vars.size());
+        return vars.size() <= MAX_CAPACITY;
     }
 
     /**
@@ -256,7 +294,7 @@ final class ProgNode extends CoreNode {
     void parseProg(Tokenizer t) throws InterpreterException {
         assert(t != null);
 
-        matchConsume(t, Token.PROGRAM);
+        line = matchConsume(t, Token.PROGRAM).line;
         decls = new DeclSeqNode(this);
         decls.parseDeclSeq(t);
         matchConsume(t, Token.BEGIN);
@@ -264,6 +302,14 @@ final class ProgNode extends CoreNode {
         stmts.parseStmtSeq(t);
         matchConsume(t, Token.END);
         matchConsume(t, Token.EOF);
+    }
+
+    /**
+     * Starts execution of {@code this.stmts}.
+     * @throws InterpreterException if any recursive execution call failed
+     */
+    public void execProg() throws InterpreterException {
+        this.stmts.execStmtSeq();
     }
 }
 
@@ -294,7 +340,7 @@ final class DeclSeqNode extends CoreNode {
     /**
      * Calls {@code print()} for each {@code DeclNode} in {@code this.decls}.
      */
-    public void print() {
+    void print() {
         for (DeclNode n: decls) n.print();
     }
 
@@ -302,12 +348,18 @@ final class DeclSeqNode extends CoreNode {
      * Fills content of {@code this.decls} by consuming {@code Tokenizer}.
      * @param t {@code Tokenizer} instance
      * @throws InterpreterException if any recursive call to {@code parseDecl()} failed
+     * @throws EmptySequenceException if {@code this.decls.isEmpty()} after parsing
      */
     void parseDeclSeq(Tokenizer t) throws InterpreterException {
         while (testConsume(t, Token.INT)) {
             DeclNode curr = new DeclNode(prog);
             curr.parseDecl(t);
             decls.add(curr);
+        }
+
+        if (this.decls.isEmpty()) {
+            String info = String.format(CONTEXT_TEMPLATE, prog.line, "Empty DeclSeq");
+            throw new EmptySequenceException(info);
         }
     }
 }
@@ -334,8 +386,8 @@ final class DeclNode extends CoreNode {
     /**
      * Print declaration line. All symbols declared on this line will be shown.
      */
-    public void print() {
-        System.out.printf("%sint %s;\n", getIndent(), String.join(", ", lineVars));
+    void print() {
+        out.printf("%sint %s;\n", getIndent(), String.join(", ", lineVars));
     }
 
     /**
@@ -349,17 +401,23 @@ final class DeclNode extends CoreNode {
         matchConsume(t, Token.INT);
 
         Token curr = matchConsume(t, Token.ID);
+        line = curr.line; // TODO: note in ProgNode comment
         do {
+            if (prog.varsIsFull()) {
+                String info = String.format(CONTEXT_TEMPLATE, curr.line, "Program symbol table is already full when declaring " + curr.name);
+                throw new NoMoreDeclException(info);
+            }
+
             checkRedeclared(curr);
             prog.vars.put(curr.name, null);
             lineVars.add(curr.name);
 
-            if(!this.testConsume(t, Token.COMMA)) break;
-            this.matchConsume(t, Token.COMMA);
+            if (!testConsume(t, Token.COMMA)) break;
+            matchConsume(t, Token.COMMA);
             curr = matchConsume(t, Token.ID);
         } while (true);
 
-        this.matchConsume(t, Token.SEMICOL);
+        matchConsume(t, Token.SEMICOL);
     }
 }
 
@@ -400,7 +458,7 @@ final class StmtSeqNode extends CoreNode {
     /**
      * Calls {@code print()} for each {@code StmtNode} in {@code this.stmts}.
      */
-    public void print() {
+    void print() {
         for (StmtNode n: stmts) n.print();
     }
 
@@ -408,12 +466,14 @@ final class StmtSeqNode extends CoreNode {
      * Iteratively creates and calls to parse {@code StmtNode} until a terminating {@code Token} is reached.
      * @param t {@code Tokenizer} instance
      * @throws InterpreterException if any recursive parse call fails;
-     *          or any {@code curr} isn't a {@code StmtNode} starting or {@code StmtSeqNode} terminating {@code Token}.
+     *          or any {@code curr} isn't a {@code StmtNode} starting or {@code StmtSeqNode} terminating {@code Token}
+     * @throws EmptySequenceException if {@code this.stmts.isEmpty()} after parsing
      */
     void parseStmtSeq(Tokenizer t) throws InterpreterException {
         assert(t != null);
 
         Token curr = t.getCurrent();
+        line = curr.line;
         while (curr.code != Token.EOF) {
             StmtNode stmt = null;
             switch (curr.code) {
@@ -437,17 +497,22 @@ final class StmtSeqNode extends CoreNode {
                     stmt = new StmtNode(prog, StmtNode.StmtType.ASSIGN, level + 1);
                     stmt.parseAssign(t);
                     break;
-                case Token.END:
-                    return;
-                case Token.ELSE:
-                    return;
                 default:
                     this.raiseUnexpected(curr.line, String.format("Expected statement, got '%s'", curr.name));
             }
-            if (stmt != null) stmts.add(stmt);
-            else throw new Error("Variable stmts reference lost after switch");
+            stmts.add(stmt);
             curr = t.getCurrent();
         }
+
+        if (this.stmts.isEmpty()) {
+            String info = String.format(CONTEXT_TEMPLATE, prog.line, "Empty StmtSeq");
+            throw new EmptySequenceException(info);
+        }
+    }
+
+    void execStmtSeq() throws InterpreterException {
+        for (StmtNode n: stmts)
+            n.execStmt();
     }
 }
 
@@ -520,30 +585,30 @@ final class StmtNode extends CoreNode {
 
         switch (type) {
             case ASSIGN:
-                System.out.printf("%s%s = %s;\n", getIndent(), assignId, assignExp.getExp());
+                out.printf("%s%s = %s;\n", getIndent(), assignId, assignExp.getExp());
                 break;
             case IF:
-                System.out.printf("%sif %s then\n", getIndent(), if_loopCond.getCond());
+                out.printf("%sif %s then\n", getIndent(), if_loopCond.getCond());
                 this.if_loopStmtSeq.print();
                 if (this.elseStmtSeq != null) {
-                    System.out.printf("%selse\n", getIndent());
+                    out.printf("%selse\n", getIndent());
                     this.elseStmtSeq.print();
                 }
-                System.out.printf("%send;\n", getIndent());
+                out.printf("%send;\n", getIndent());
                 break;
             case LOOP:
-                System.out.printf("%swhile %s loop\n", getIndent(), if_loopCond.getCond());
+                out.printf("%swhile %s loop\n", getIndent(), if_loopCond.getCond());
                 this.if_loopStmtSeq.print();
-                System.out.printf("%send;\n", getIndent());
+                out.printf("%send;\n", getIndent());
                 break;
             case IN:
-                System.out.printf("%sread %s;\n", getIndent(), String.join(", ", in_outIdList));
+                out.printf("%sread %s;\n", getIndent(), String.join(", ", in_outIdList));
                 break;
             case OUT:
-                System.out.printf("%swrite %s;\n", getIndent(), String.join(", ", in_outIdList));
+                out.printf("%swrite %s;\n", getIndent(), String.join(", ", in_outIdList));
                 break;
             default:
-                throw new IllegalStateException("Uninitialized stmt not caught by assert");
+                raiseError("StmtNode.print() Line " + line, "Uninitialized stmt not caught by assert");
         }
     }
 
@@ -553,9 +618,13 @@ final class StmtNode extends CoreNode {
      * @throws InterpreterException if any {@code matchConsume()} failed or any recursive parse call failed.
      */
     void parseIfLoop(Tokenizer t) throws InterpreterException {
-        if (type == StmtType.IF) matchConsume(t, Token.IF);
-        else if (type == StmtType.LOOP) matchConsume(t, Token.WHILE);
-        else throw new Error("Unexpected call to parseIfLoop on type " + type);
+        assert type == StmtType.IF || type == StmtType.LOOP;
+
+        Token tt;
+
+        if (type == StmtType.IF) tt = matchConsume(t, Token.IF);
+        else tt = matchConsume(t, Token.WHILE);
+        line = tt.line;
 
         if_loopCond = new CondNode(prog);
         if_loopCond.parseCond(t);
@@ -581,10 +650,14 @@ final class StmtNode extends CoreNode {
      * @param t {@code Tokenizer} instance
      * @throws InterpreterException if any {@code matchConsume()} failed or any recursive parse call failed.
      */
-    void parseInOut(Tokenizer t) throws CoreError.InterpreterException {
-        if (type == StmtType.IN) matchConsume(t, Token.READ);
-        else if (type == StmtType.OUT) matchConsume(t, Token.WRITE);
-        else throw new Error("Unexpected call to parseInOut on type " + type);
+    void parseInOut(Tokenizer t) throws InterpreterException {
+        assert type == StmtType.IN || type == StmtType.OUT;
+
+        Token tt;
+
+        if (type == StmtType.IN) tt = matchConsume(t, Token.READ);
+        else tt = matchConsume(t, Token.WRITE);
+        line = tt.line;
 
         in_outIdList = new ArrayList<>();
 
@@ -605,13 +678,13 @@ final class StmtNode extends CoreNode {
      * @param t {@code Tokenizer} instance
      * @throws InterpreterException if any {@code matchConsume()} failed or any recursive parse call failed.
      */
-    void parseAssign(Tokenizer t) throws CoreError.InterpreterException {
-        if (type != StmtType.ASSIGN)
-            throw new Error("Unexpected call to parseAssign on type " + type);
+    void parseAssign(Tokenizer t) throws InterpreterException {
+        assert type == StmtType.ASSIGN;
 
         Token curr = matchConsume(t, Token.ID);
         checkUndeclared(curr);
         assignId = curr.name;
+        line = curr.line;
 
         matchConsume(t, Token.ASSIGN);
 
@@ -619,6 +692,63 @@ final class StmtNode extends CoreNode {
         assignExp.parseExp(t);
 
         matchConsume(t, Token.SEMICOL);
+    }
+
+    /**
+     *
+     * @throws InterpreterException
+     */
+    void execStmt() throws InterpreterException {
+        switch (type) {
+            case IF:
+                assert if_loopCond != null;
+
+                if (if_loopCond.evalCond())
+                    if_loopStmtSeq.execStmtSeq();
+                else if (elseStmtSeq != null)
+                    elseStmtSeq.execStmtSeq();
+                break;
+            case LOOP:
+                assert if_loopCond != null;
+
+                while (if_loopCond.evalCond())
+                    if_loopStmtSeq.execStmtSeq();
+                break;
+            case IN: // TODO: wait for approval of behavior
+                assert in_outIdList != null;
+
+                Scanner sc = new Scanner(System.in);
+                for (String var: in_outIdList) {
+                    assert prog.vars.containsKey(var);
+
+                    out.println(var + " =? ");
+                    int input = sc.nextInt(); // JVM will keep asking until a int-parsable String has been entered;
+                    while (INT_MIN > input || input > INT_MAX) {
+                        if (input < INT_MIN) err.println("Minimum allowed is " + INT_MIN + " got " + input);
+                        else err.println("Maximum allowed is " + INT_MAX + " got " + input);
+                        input = sc.nextInt();
+                    }
+                    prog.vars.put(var, input);
+                }
+                break;
+            case OUT:
+                assert in_outIdList != null;
+
+                for (String var: in_outIdList) {
+                    assert prog.vars.containsKey(var);
+
+                    if (prog.vars.get(var) != null) out.println(var + " = " + prog.vars.get(var));
+                    else raiseInterpreter(line, new UninitializedException("Uninitialized variable " + var));
+                }
+                break;
+            case ASSIGN:
+                assert prog.vars.containsKey(assignId);
+
+                prog.vars.put(assignId, assignExp.evalExp());
+                break;
+            default:
+                raiseError("",""); // TODO
+        }
     }
 
     /**
@@ -692,6 +822,8 @@ final class ExpNode extends CoreNode {
     void parseExp(Tokenizer t) throws InterpreterException {
         term = new TermNode(prog);
         term.parseTerm(t);
+        line = term.line;
+
         if (testConsume(t, Token.PLUS)) {
             type = ExpType.PLUS;
             matchConsume(t, Token.PLUS);
@@ -704,6 +836,34 @@ final class ExpNode extends CoreNode {
             exp.parseExp(t);
         } else {
             type = ExpType.TERM;
+        }
+    }
+
+    /**
+     *
+     * @return
+     * @throws InterpreterException
+     */
+    int evalExp() throws InterpreterException {
+        assert type != null;
+
+        long value;
+
+        switch (type) {
+            case TERM:
+                return term.evalTerm();
+            case PLUS:
+                value = term.evalTerm() + exp.evalExp();
+
+                if (value <= INT_MAX) return (int) value;
+                else raiseInterpreter(line, new OverflowUnderflowException(getExp() + " results in overflow"));
+            case MINUS:
+                value = term.evalTerm() + exp.evalExp();
+
+                if (value >= INT_MIN) return (int) value;
+                else raiseInterpreter(line, new OverflowUnderflowException(getExp() + " results in underflow"));
+            default:
+                throw new IllegalStateException();
         }
     }
 
@@ -772,8 +932,12 @@ final class TermNode extends CoreNode {
      * @throws InterpreterException if {@code matchConsume()} failed or any recursive parse call failed.
      */
     void parseTerm(Tokenizer t) throws InterpreterException {
+        assert t != null;
+
         fac = new FacNode(prog);
         fac.parseFac(t);
+        line = fac.line;
+
         if (testConsume(t, Token.STAR)) {
             type = TermType.MUL;
             matchConsume(t, Token.STAR);
@@ -781,6 +945,29 @@ final class TermNode extends CoreNode {
             term.parseTerm(t);
         } else {
             type = TermType.FAC;
+        }
+    }
+
+    /**
+     *
+     * @return
+     * @throws InterpreterException
+     */
+    int evalTerm() throws InterpreterException {
+        assert type != null;
+
+        long value;
+
+        switch (type) {
+            case FAC:
+                return fac.evalFac();
+            case MUL:
+                value = fac.evalFac() * term.evalTerm();
+                if (INT_MIN <= value && value <= INT_MAX) return (int) value;
+                else raiseInterpreter(line, new OverflowUnderflowException(getTerm() + " results in overflow"));
+                // TODO: underflow possible if negative input allowed.
+            default:
+                throw new IllegalStateException();
         }
     }
 
@@ -858,6 +1045,8 @@ final class FacNode extends CoreNode {
         assert(t != null);
 
         Token curr = t.getCurrent();
+        line = curr.line;
+
         switch (curr.code) {
             case Token.ID:
                 type = FacType.ID;
@@ -879,6 +1068,29 @@ final class FacNode extends CoreNode {
                 break;
             default:
                 raiseUnexpected(curr.line, "Expected factor, got " + curr.name);
+        }
+    }
+
+    /**
+     *
+     * @return
+     * @throws InterpreterException
+     */
+    int evalFac() throws InterpreterException {
+        assert type != null;
+
+        switch (type) {
+            case NUM:
+                return value;
+            case ID:
+                assert prog.vars.containsKey(id);
+
+                if (prog.vars.get(id) != null) return prog.vars.get(id);
+                else raiseInterpreter(line, new UninitializedException("")); // TODO: check behavior for uninitialized variable compare
+            case EXP:
+                return exp.evalExp();
+            default:
+                throw new IllegalStateException();
         }
     }
 
@@ -989,6 +1201,26 @@ final class CondNode extends CoreNode {
     }
 
     /**
+     *
+     * @return
+     * @throws InterpreterException
+     */
+    boolean evalCond() throws InterpreterException {
+        switch (type) {
+            case COMP:
+                return comp.evalComp();
+            case NOT:
+                return !cond1.evalCond();
+            case AND:
+                return cond1.evalCond() && cond2.evalCond();
+            case OR:
+                return cond1.evalCond() || cond2.evalCond();
+            default:
+                throw new IllegalStateException();
+        }
+    }
+
+    /**
      * Condition type enums as defined in CORE specification.
      */
     enum CondType {
@@ -1047,12 +1279,39 @@ final class CompNode extends CoreNode {
      * @throws InterpreterException if {@code matchConsume()} failed or any recursive parse call failed
      */
     void parseComp(Tokenizer t) throws InterpreterException {
-        matchConsume(t, Token.LPAREN);
+        Token tt = matchConsume(t, Token.LPAREN);
+        line = tt.line;
         fac1 = new FacNode(prog);
         fac1.parseFac(t);
         type = rangeConsume(t, Token.NEQ, Token.LT);
         fac2 = new FacNode(prog);
         fac2.parseFac(t);
         matchConsume(t, Token.RPAREN);
+    }
+
+    /**
+     *
+     * @return
+     * @throws InterpreterException
+     */
+    boolean evalComp() throws InterpreterException {
+        switch (type.code) {
+            case Token.NEQ:
+                return fac1.evalFac() != fac2.evalFac();
+            case Token.EQ:
+                return fac1.evalFac() == fac2.evalFac();
+            case Token.GEQ:
+                return fac1.evalFac() >= fac2.evalFac();
+            case Token.LEQ:
+                return fac1.evalFac() <= fac2.evalFac();
+            case Token.GT:
+                return fac1.evalFac() > fac2.evalFac();
+            case Token.LT:
+                return fac1.evalFac() < fac2.evalFac();
+            default:
+                raiseError("CompNode.evalComp Line " + line, "Invalid comp-op type: got " + type.code);
+        }
+
+        return false;
     }
 }

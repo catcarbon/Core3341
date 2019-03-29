@@ -1,5 +1,9 @@
+#jenv
+.java-version
+
 # 3341 Test Files
 data
+submission
 
 # Compiled class file
 *.class

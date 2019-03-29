@@ -20,8 +20,8 @@ public class CoreError {
         }
     }
 
-    static class UnderflowOverflowException extends InterpreterException {
-        UnderflowOverflowException(String msg) {
+    static class OverflowUnderflowException extends InterpreterException {
+        OverflowUnderflowException(String msg) {
             super(msg);
         }
     }
@@ -30,6 +30,14 @@ public class CoreError {
         InvalidInputException(String msg) {
             super(msg);
         }
+    }
+
+    static class NoMoreDeclException extends InterpreterException {
+        NoMoreDeclException(String msg) { super(msg); }
+    }
+
+    static class EmptySequenceException extends InterpreterException {
+        EmptySequenceException(String msg) { super(msg); }
     }
 
     static class UndeclaredException extends InterpreterException {
