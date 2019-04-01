@@ -311,6 +311,10 @@ final class ProgNode extends CoreNode {
         matchConsume(t, Token.BEGIN);
         stmts = new StmtSeqNode(this, level);
         stmts.parseStmtSeq(t);
+        if (stmts.isEmpty()) {
+            String info = String.format(CONTEXT_TEMPLATE, prog.line, "Empty StmtSeq");
+            throw new EmptySequenceException(info);
+        }
         matchConsume(t, Token.END);
         matchConsume(t, Token.EOF);
     }
@@ -469,6 +473,14 @@ final class StmtSeqNode extends CoreNode {
     }
 
     /**
+     * Tells if {@code this} is an empty block.
+     * @return {@code stmts.isEmpty()}
+     */
+    boolean isEmpty() {
+        return stmts.isEmpty();
+    }
+
+    /**
      * Calls {@code print()} for each {@code StmtNode} in {@code this.stmts}.
      */
     void print() {
@@ -518,11 +530,6 @@ final class StmtSeqNode extends CoreNode {
             }
             stmts.add(stmt);
             curr = t.getCurrent();
-        }
-
-        if (this.stmts.isEmpty()) {
-            String info = String.format(CONTEXT_TEMPLATE, prog.line, "Empty StmtSeq");
-            throw new EmptySequenceException(info);
         }
     }
 
