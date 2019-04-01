@@ -9,11 +9,13 @@ import zhayi.core3341.CoreError.*;
  * Node Implementation of CORE language for CSE 3341 Project PA2
  *
  * @author Yi Zhang
- * @email zhang.5281@osu.edu
  */
 public abstract class CoreNode {
-    public static final int INT_MIN = 0;
-    public static final int INT_MAX = 99999999;
+    /**
+     * Core Interpreter INT limits.
+     */
+    static final int INT_MIN = Integer.MIN_VALUE;
+    static final int INT_MAX = Integer.MAX_VALUE;
 
     /**
      * Syntax error reporting template.
@@ -28,9 +30,10 @@ public abstract class CoreNode {
     static final String CONTEXT_TEMPLATE = "Context Error: [Line %d] %s";
 
     /**
-     *
+     * Interpreter error reporting template.
+     * raiseInterpreter
      */
-    static final String INTERPRET_TEMPLATE = "Interpreter Error: [Line %d] %s";
+    private static final String INTERPRET_TEMPLATE = "Interpreter Error: [Line %d] %s";
 
     private static final String INTERNAL_TEMPLATE = "Internal Error: [%s] %s";
 
@@ -45,7 +48,7 @@ public abstract class CoreNode {
     int level;
 
     /**
-     * Line number in original code.
+     * Line number of the first matching token in original code.
      */
     int line;
 
@@ -157,29 +160,35 @@ public abstract class CoreNode {
     }
 
     /**
-     *
-     * @param module
-     * @param msg
-     * @throws Error
+     * @deprecated
+     * Report unexpected results that should've been handled.
+     * @param module module name
+     * @param msg error message
+     * @throws Error using {@code INTERNAL_TEMPLATE}
      */
+    @Deprecated
     void raiseError(String module, String msg) throws Error {
         String info = String.format(INTERNAL_TEMPLATE, module, msg);
         throw new Error(info);
     }
 
     /**
-     *
-     * @param line
-     * @param ex
-     * @throws InterpreterException
+     * Raise when runtime error encountered.
+     * @param line line number
+     * @param ex {@code InterpreterException} that contains the error message
+     * @throws InterpreterException a new instance of {@code ex} using {@code INTERPRET_TEMPLATE}
      */
     void raiseInterpreter(int line, InterpreterException ex) throws InterpreterException {
         String info = String.format(INTERPRET_TEMPLATE, line, ex.getMessage());
+        throw new InterpreterException(info);
+        /*
         try {
             throw ex.getClass().getConstructor(String.class).newInstance(info);
         } catch (Exception e) {
-            throw new Error(e); // I know which class {@code ex} is but you still failed
+            //throw new InterpreterException(e.toString()); // I know which class {@code ex} is but you still failed
+            //throw e;
         }
+        */
     }
 
     /**
@@ -242,7 +251,7 @@ final class ProgNode extends CoreNode {
     /**
      * Max of 20 distinct user-defined variables.
      */
-    public static final int MAX_CAPACITY = 20;
+    private static final int MAX_CAPACITY = 20;
 
     /**
      * Declaration sequence node.
@@ -280,10 +289,12 @@ final class ProgNode extends CoreNode {
         out.printf("%send\n", getIndent());
     }
 
+    /**
+     * Test if program symbol table is full.
+     * @return true if {@code this.vars.size() >= MAX_CAPACITY}, else false
+     */
     boolean varsIsFull() {
-        if (vars.size() > MAX_CAPACITY)
-            raiseError("ProgNode", "Symbol table exceeded limit " + MAX_CAPACITY + ", got " + vars.size());
-        return vars.size() <= MAX_CAPACITY;
+        return vars.size() >= MAX_CAPACITY;
     }
 
     /**
@@ -395,16 +406,18 @@ final class DeclNode extends CoreNode {
      * @param t {@code Tokenizer} instance
      * @throws InterpreterException
      *          {@code RedeclaredException} if {@code checkRedeclared()} failed;
-     *          {@code ConsumeMismatchException} if any {@code matchConsume()} failed.
+     *          {@code ConsumeMismatchException} if any {@code matchConsume()} failed;
+     *          {@code NoMoreDeclException} if trying to declare variable when {@code prog.varsIsFull()}.
      */
     void parseDecl(Tokenizer t) throws InterpreterException {
         matchConsume(t, Token.INT);
 
         Token curr = matchConsume(t, Token.ID);
-        line = curr.line; // TODO: note in ProgNode comment
+        line = curr.line;
         do {
             if (prog.varsIsFull()) {
-                String info = String.format(CONTEXT_TEMPLATE, curr.line, "Program symbol table is already full when declaring " + curr.name);
+                String info = String.format(CONTEXT_TEMPLATE, curr.line,
+                        "Program symbol table is already full when declaring " + curr.name);
                 throw new NoMoreDeclException(info);
             }
 
@@ -497,6 +510,9 @@ final class StmtSeqNode extends CoreNode {
                     stmt = new StmtNode(prog, StmtNode.StmtType.ASSIGN, level + 1);
                     stmt.parseAssign(t);
                     break;
+                case Token.END:
+                case Token.ELSE:
+                    return;
                 default:
                     this.raiseUnexpected(curr.line, String.format("Expected statement, got '%s'", curr.name));
             }
@@ -510,6 +526,10 @@ final class StmtSeqNode extends CoreNode {
         }
     }
 
+    /**
+     * Recursively executes all {@code StmtNode} by order.
+     * @throws InterpreterException if any recursive execution call failed
+     */
     void execStmtSeq() throws InterpreterException {
         for (StmtNode n: stmts)
             n.execStmt();
@@ -608,7 +628,7 @@ final class StmtNode extends CoreNode {
                 out.printf("%swrite %s;\n", getIndent(), String.join(", ", in_outIdList));
                 break;
             default:
-                raiseError("StmtNode.print() Line " + line, "Uninitialized stmt not caught by assert");
+                throw new IllegalStateException();
         }
     }
 
@@ -695,8 +715,8 @@ final class StmtNode extends CoreNode {
     }
 
     /**
-     *
-     * @throws InterpreterException
+     * Recursively execute by {@code type}.
+     * @throws InterpreterException if any recursive execution or evaluation failed
      */
     void execStmt() throws InterpreterException {
         switch (type) {
@@ -714,21 +734,27 @@ final class StmtNode extends CoreNode {
                 while (if_loopCond.evalCond())
                     if_loopStmtSeq.execStmtSeq();
                 break;
-            case IN: // TODO: wait for approval of behavior
+            case IN:
                 assert in_outIdList != null;
 
                 Scanner sc = new Scanner(System.in);
                 for (String var: in_outIdList) {
                     assert prog.vars.containsKey(var);
 
-                    out.println(var + " =? ");
-                    int input = sc.nextInt(); // JVM will keep asking until a int-parsable String has been entered;
-                    while (INT_MIN > input || input > INT_MAX) {
-                        if (input < INT_MIN) err.println("Minimum allowed is " + INT_MIN + " got " + input);
-                        else err.println("Maximum allowed is " + INT_MAX + " got " + input);
-                        input = sc.nextInt();
-                    }
-                    prog.vars.put(var, input);
+                    String input;
+                    int value;
+                    do {
+                        out.print(var + " =? ");
+                        input = sc.nextLine();
+                        try {
+                            value = Integer.parseInt(input.trim()); // not utf-8 safe
+                            break;
+                        } catch (NumberFormatException e) {
+                            err.println("Invalid input, please enter integer from " + INT_MIN +
+                                    " to " + INT_MAX + " inclusive" );
+                        }
+                    } while (true);
+                    prog.vars.put(var, value);
                 }
                 break;
             case OUT:
@@ -738,7 +764,7 @@ final class StmtNode extends CoreNode {
                     assert prog.vars.containsKey(var);
 
                     if (prog.vars.get(var) != null) out.println(var + " = " + prog.vars.get(var));
-                    else raiseInterpreter(line, new UninitializedException("Uninitialized variable " + var));
+                    else raiseInterpreter(line, new UninitializedException("Using uninitialized variable " + var));
                 }
                 break;
             case ASSIGN:
@@ -747,7 +773,7 @@ final class StmtNode extends CoreNode {
                 prog.vars.put(assignId, assignExp.evalExp());
                 break;
             default:
-                raiseError("",""); // TODO
+                throw new IllegalStateException();
         }
     }
 
@@ -840,28 +866,36 @@ final class ExpNode extends CoreNode {
     }
 
     /**
-     *
-     * @return
-     * @throws InterpreterException
+     * Recursively evaluates expression.
+     * @return int value from evaluation
+     * @throws InterpreterException if overflow or underflow occurred during evaluation,
+     *                              or any recursive evaluation call failed.
      */
     int evalExp() throws InterpreterException {
-        assert type != null;
-
+        assert term != null;
         long value;
 
         switch (type) {
             case TERM:
                 return term.evalTerm();
             case PLUS:
-                value = term.evalTerm() + exp.evalExp();
+                assert exp != null;
+                value = (long) term.evalTerm() + exp.evalExp();
 
-                if (value <= INT_MAX) return (int) value;
-                else raiseInterpreter(line, new OverflowUnderflowException(getExp() + " results in overflow"));
+                if (value > INT_MAX)
+                    raiseInterpreter(line, new OverflowUnderflowException(getExp() + " results in overflow"));
+                else if (value < INT_MIN)
+                    raiseInterpreter(line, new OverflowUnderflowException(getExp() + " results in underflow"));
+                else return (int) value;
             case MINUS:
-                value = term.evalTerm() + exp.evalExp();
+                assert exp != null;
+                value = (long) term.evalTerm() - exp.evalExp();
 
-                if (value >= INT_MIN) return (int) value;
-                else raiseInterpreter(line, new OverflowUnderflowException(getExp() + " results in underflow"));
+                if (value > INT_MAX)
+                    raiseInterpreter(line, new OverflowUnderflowException(getExp() + " results in overflow"));
+                else if (value < INT_MIN)
+                    raiseInterpreter(line, new OverflowUnderflowException(getExp() + " results in underflow"));
+                else return (int) value;
             default:
                 throw new IllegalStateException();
         }
@@ -949,23 +983,26 @@ final class TermNode extends CoreNode {
     }
 
     /**
-     *
-     * @return
-     * @throws InterpreterException
+     * Recursively evaluates term.
+     * @return int value from evaluation
+     * @throws InterpreterException if multiplication resulted in overflow or underflow, or factor evaluation failed.
      */
     int evalTerm() throws InterpreterException {
-        assert type != null;
-
         long value;
 
         switch (type) {
             case FAC:
+                assert fac != null;
                 return fac.evalFac();
             case MUL:
-                value = fac.evalFac() * term.evalTerm();
-                if (INT_MIN <= value && value <= INT_MAX) return (int) value;
-                else raiseInterpreter(line, new OverflowUnderflowException(getTerm() + " results in overflow"));
-                // TODO: underflow possible if negative input allowed.
+                assert fac != null && term != null;
+                value = (long) fac.evalFac() * term.evalTerm();
+
+                if (INT_MIN > value)
+                    raiseInterpreter(line, new OverflowUnderflowException(getTerm() + " results in underflow"));
+                else if (value > INT_MAX)
+                    raiseInterpreter(line, new OverflowUnderflowException(getTerm() + " results in overflow"));
+                else return (int) value;
             default:
                 throw new IllegalStateException();
         }
@@ -1072,13 +1109,11 @@ final class FacNode extends CoreNode {
     }
 
     /**
-     *
-     * @return
-     * @throws InterpreterException
+     * Recursively evaluates factor.
+     * @return int value from evaluation
+     * @throws InterpreterException if evaluating uninitialized variable, or expression evaluation failed.
      */
     int evalFac() throws InterpreterException {
-        assert type != null;
-
         switch (type) {
             case NUM:
                 return value;
@@ -1086,8 +1121,9 @@ final class FacNode extends CoreNode {
                 assert prog.vars.containsKey(id);
 
                 if (prog.vars.get(id) != null) return prog.vars.get(id);
-                else raiseInterpreter(line, new UninitializedException("")); // TODO: check behavior for uninitialized variable compare
+                else raiseInterpreter(line, new UninitializedException("Using uninitialized variable " + id));
             case EXP:
+                assert exp != null;
                 return exp.evalExp();
             default:
                 throw new IllegalStateException();
@@ -1195,25 +1231,29 @@ final class CondNode extends CoreNode {
             cond2.parseCond(t);
             matchConsume(t, Token.RBRACK);
         } else {
-            Token curr = t.next();
+            Token curr = t.getCurrent();
             raiseUnexpected(curr.line, "Expected condition, got " + curr.name);
         }
     }
 
     /**
-     *
-     * @return
-     * @throws InterpreterException
+     * Recursively evaluates condition.
+     * @return boolean value from evaluation
+     * @throws InterpreterException if any recursive evaluation call failed.
      */
     boolean evalCond() throws InterpreterException {
         switch (type) {
             case COMP:
+                assert comp != null;
                 return comp.evalComp();
             case NOT:
+                assert cond1 != null;
                 return !cond1.evalCond();
             case AND:
+                assert cond1 != null && cond2 != null;
                 return cond1.evalCond() && cond2.evalCond();
             case OR:
+                assert cond1 != null && cond2 != null;
                 return cond1.evalCond() || cond2.evalCond();
             default:
                 throw new IllegalStateException();
@@ -1290,9 +1330,9 @@ final class CompNode extends CoreNode {
     }
 
     /**
-     *
-     * @return
-     * @throws InterpreterException
+     * Recursively evaluates compare.
+     * @return boolean value from evaluation
+     * @throws InterpreterException if any recursive evaluation call failed.
      */
     boolean evalComp() throws InterpreterException {
         switch (type.code) {
@@ -1309,9 +1349,7 @@ final class CompNode extends CoreNode {
             case Token.LT:
                 return fac1.evalFac() < fac2.evalFac();
             default:
-                raiseError("CompNode.evalComp Line " + line, "Invalid comp-op type: got " + type.code);
+                throw new IllegalStateException();
         }
-
-        return false;
     }
 }

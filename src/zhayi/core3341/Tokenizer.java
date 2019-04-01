@@ -12,7 +12,6 @@ import zhayi.core3341.CoreError.*;
  * Tokenizer for CORE language for CSE 3341 Project PA1
  *
  * @author Yi Zhang
- * @email zhang.5281@osu.edu
  */
 public class Tokenizer implements Iterable<Token> {
     private static Logger log;
@@ -20,7 +19,7 @@ public class Tokenizer implements Iterable<Token> {
             "loop", "read", "write", "and", "or", ";", ",", "=", "!", "[", "]", "(", ")", "+", "-", "*", "!=", "==",
             ">=", "<=", ">", "<", "NUM", "ID", "~EOF~");
 
-    private static int MAXLEN_NUM_ID = 8;
+    private final static int MAXLEN_NUM_ID = 8;
 
     private List<Token> tokens = new ArrayList<>();
     private int currentIndex = 0;
@@ -55,8 +54,9 @@ public class Tokenizer implements Iterable<Token> {
     }
 
     void tokenize(String string) throws InvalidTokenException {
+        FileReader fr;
         try {
-            FileReader fr = new FileReader(string);
+            fr = new FileReader(string);
             currentChar = this.nextChar(fr);
             while (currentChar != null) {
                 String anToken;

@@ -4,7 +4,6 @@ package zhayi.core3341;
  * Tokens of CORE language for CSE 3341 Project
  *
  * @author Yi Zhang
- * @email zhang.5281@osu.edu
  */
 public class Token {
     static final int PROGRAM = 1;

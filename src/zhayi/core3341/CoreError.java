@@ -4,7 +4,6 @@ package zhayi.core3341;
  * CoreError Exceptions for CSE 3341 Project
  *
  * @author Yi Zhang
- * @email zhang.5281@osu.edu
  */
 public class CoreError {
 
@@ -22,12 +21,6 @@ public class CoreError {
 
     static class OverflowUnderflowException extends InterpreterException {
         OverflowUnderflowException(String msg) {
-            super(msg);
-        }
-    }
-
-    static class InvalidInputException extends InterpreterException {
-        InvalidInputException(String msg) {
             super(msg);
         }
     }

@@ -7,9 +7,8 @@ import java.util.logging.Logger;
  * Parser entry point for CSE 3341 Project PA2
  *
  * @author Yi Zhang
- * @email zhang.5281@osu.edu
  */
-public class Parser {
+public final class Parser {
     private ProgNode prog;
     private Tokenizer tokenizer;
 
@@ -36,6 +35,15 @@ public class Parser {
         }
     }
 
+    void execProg(Logger log) {
+        try {
+            prog.execProg();
+        } catch (CoreError.InterpreterException ex) {
+            log.severe(ex.getLocalizedMessage());
+            System.exit(ex.hashCode());
+        }
+    }
+
     void parse(String path) {
         initTokenStream(path);
         try {
@@ -47,7 +55,7 @@ public class Parser {
 
     }
 
-    public void printParser() {
+    void printParser() {
         prog.print();
     }
 
